@@ -6,11 +6,14 @@ import { AppRoutes } from '../src/App';
 import type { DataSource } from '../src/data/dataSource';
 import { sampleDataSource } from '../src/data/sampleDataSource';
 import { actualDataSource } from '../src/data/actualDataSource';
+import { createActualDataSource } from '../src/data/actualDataSource';
+import { MemoryImportedStore } from '../src/data/importedStore';
 import { AppStateProvider } from '../src/state/AppState';
+import { RESULTS_TEXT, SCHEDULE_TEXT } from './officialFixtures';
 
-function renderAt(path: string, sources?: Record<'sample' | 'actual', DataSource>) {
+function renderAt(path: string, sources?: Record<'sample' | 'actual', DataSource>, store = new MemoryImportedStore()) {
   return render(
-    <AppStateProvider sources={sources}>
+    <AppStateProvider sources={sources ?? { sample: sampleDataSource, actual: createActualDataSource(store) }} importedStore={store}>
       <MemoryRouter initialEntries={[path]}>
         <AppRoutes />
       </MemoryRouter>
@@ -36,14 +39,14 @@ describe('画面操作', () => {
     const user = userEvent.setup();
     renderAt('/races');
     await waitReady();
-    expect(screen.getByText('該当 72 レース')).toBeInTheDocument();
+    expect(screen.getByText(/該当 576 レース/)).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('開催日'), '2026-10-22');
     expect(screen.getByText('該当 36 レース')).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('競艇場'), '24');
     await user.selectOptions(screen.getByLabelText('レース番号'), '3');
     expect(screen.getByText('該当 1 レース')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '条件をクリア' }));
-    expect(screen.getByText('該当 72 レース')).toBeInTheDocument();
+    expect(screen.getByText(/該当 576 レース/)).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('開催日'), '2026-10-22');
     await user.selectOptions(screen.getByLabelText('競艇場'), '24');
     await user.selectOptions(screen.getByLabelText('レース番号'), '3');
@@ -82,9 +85,11 @@ describe('画面操作', () => {
     await user.type(minEv, '0');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     const table = screen.getByTestId('candidate-table');
-    const firstSave = within(table).getAllByRole('button', { name: '保存' })[0]!;
+    const firstSave = within(table).getAllByRole('button', { name: /を保存$/ })[0]!;
     await user.click(firstSave);
     expect(screen.getByText(/分析履歴に保存しました/)).toBeInTheDocument();
+    // 同じ買い目は二重に保存できない
+    expect(within(table).getAllByRole('button', { name: /は保存済み$/ })[0]).toBeDisabled();
 
     await user.click(screen.getAllByRole('link', { name: /分析履歴/ })[0]!);
     await screen.findByRole('heading', { name: '分析履歴・振り返り' });
@@ -127,7 +132,7 @@ describe('画面操作', () => {
     renderAt('/settings');
     await waitReady();
     await user.click(screen.getByRole('radio', { name: '実データ' }));
-    expect((await screen.findAllByText(/実データの取得元が未設定です/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/実データがまだ取り込まれていません/)).length).toBeGreaterThan(0);
     await user.click(screen.getByRole('radio', { name: 'サンプルデータ（デモ）' }));
     await waitFor(() => expect(screen.getByText(/BOAT ANALYZER 同梱サンプル/)).toBeInTheDocument());
   });
@@ -159,4 +164,39 @@ describe('画面操作', () => {
     await waitReady();
     expect(screen.getByText('レースが見つかりません')).toBeInTheDocument();
   });
+
+  it('実データ：公式ファイルを取り込み、実データモードで出走表・結果を表示（オッズなしは明示）', async () => {
+    const user = userEvent.setup();
+    const { container } = renderAt('/settings');
+    await waitReady();
+    const input = container.querySelector('input[type="file"][accept^=".txt"]') as HTMLInputElement;
+    await user.upload(input, [
+      new File([SCHEDULE_TEXT], 'B261020.TXT', { type: 'text/plain' }),
+      new File([RESULTS_TEXT], 'K261020.TXT', { type: 'text/plain' }),
+    ]);
+    expect(await screen.findByText(/2ファイルを取り込みました（番組表 2レース／競走成績 2レース）/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '実データモードに切り替える' }));
+    await waitFor(() => expect(screen.getByText(/利用者が手動で取得/)).toBeInTheDocument());
+    expect(screen.queryByText(/架空のサンプルです/)).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('link', { name: /レース一覧/ })[0]!);
+    expect(await screen.findByText(/該当 2 レース/)).toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: /1R\s*住之江/ }));
+    expect(await screen.findByRole('heading', { name: 'レース結果' })).toBeInTheDocument();
+    expect(screen.getAllByText('架空一郎').length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('link', { name: 'オッズ・期待値を分析' }));
+    expect(await screen.findByText('オッズがありません')).toBeInTheDocument();
+  });
+
+  it('分析履歴：サンプルデータでモデルを学習し、検証期間の比較を表示（デモのため未検証）', async () => {
+    const user = userEvent.setup();
+    renderAt('/history');
+    await waitReady();
+    await user.click(screen.getByRole('button', { name: '学習を実行' }));
+    expect(await screen.findByTestId('validation-table', {}, { timeout: 15000 })).toBeInTheDocument();
+    expect(screen.getByText(/⚠ 未検証/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '学習モデルを使う' }));
+    expect(screen.queryByRole('button', { name: '学習モデルを使う' })).not.toBeInTheDocument();
+  }, 30000);
 });

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { filterRaces, uniqueDates, uniqueVenueIds, type RaceFilter } from '../analytics/raceFilters';
 import { DataGate } from '../components/DataGate';
@@ -7,6 +8,7 @@ import { formatDate } from '../utils/format';
 import { RACE_STATUS_LABEL, venueName } from '../utils/race';
 
 const STATUSES: Race['status'][] = ['scheduled', 'finished', 'cancelled'];
+const PAGE_SIZE = 48;
 
 export function parseRaceFilter(params: URLSearchParams): RaceFilter {
   const raceNo = Number(params.get('raceNo'));
@@ -23,6 +25,9 @@ function RaceList({ dataset }: { dataset: Dataset }) {
   const [params, setParams] = useSearchParams();
   const filter = parseRaceFilter(params);
   const races = filterRaces(dataset.races, filter);
+  const [limit, setLimit] = useState({ key: params.toString(), n: PAGE_SIZE });
+  // 絞り込み条件が変わったら表示件数を戻す
+  const shown = limit.key === params.toString() ? limit.n : PAGE_SIZE;
 
   const update = (key: string, value: string) => {
     const next = new URLSearchParams(params);
@@ -84,14 +89,14 @@ function RaceList({ dataset }: { dataset: Dataset }) {
       </div>
 
       <p className="muted" aria-live="polite">
-        該当 {races.length} レース
+        該当 {races.length} レース{races.length > shown && `（${shown}件表示）`}
       </p>
 
       {races.length === 0 ? (
         <EmptyState title="条件に合うレースがありません">絞り込み条件を変更してください。</EmptyState>
       ) : (
         <ul className="race-grid">
-          {races.map((r) => (
+          {races.slice(0, shown).map((r) => (
             <li key={r.id}>
               <Link className="race-card" to={`/races/${r.id}`}>
                 <div className="race-card__head">
@@ -106,13 +111,18 @@ function RaceList({ dataset }: { dataset: Dataset }) {
                 </div>
                 <div className="race-card__flags">
                   <span>{r.exhibition ? '展示：発表済' : '展示：未発表'}</span>
-                  <span>{r.odds ? 'オッズ：あり' : 'オッズ：未発表'}</span>
+                  <span>{r.odds ? 'オッズ：あり' : r.status === 'finished' ? 'オッズ：なし' : 'オッズ：未発表'}</span>
                   {r.entries.some((e) => e.status === 'absent') && <span className="warn">欠場あり</span>}
                 </div>
               </Link>
             </li>
           ))}
         </ul>
+      )}
+      {races.length > shown && (
+        <button type="button" className="btn btn--ghost" onClick={() => setLimit({ key: params.toString(), n: shown + PAGE_SIZE })}>
+          さらに{PAGE_SIZE}件表示
+        </button>
       )}
     </>
   );

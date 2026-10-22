@@ -1,11 +1,23 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { z } from 'zod';
-import { getModel, type ModelError, type WinProbabilityEstimate } from '../analytics/probabilityModel';
+import { mergeHistorical } from '../analytics/courseRates';
+import {
+  BUILTIN_MODELS,
+  createModelContext,
+  findModel,
+  type ModelContext,
+  type ModelError,
+  type PredictionModel,
+  type WinProbabilityEstimate,
+} from '../analytics/probabilityModel';
+import { trainedModelFromReport, trainingReportSchema, trainModel, type TrainingReport, type TrainingResult } from '../analytics/training';
 import { actualDataSource } from '../data/actualDataSource';
 import type { DataLoadError, DataSource } from '../data/dataSource';
+import { indexedDbImportedStore, mergeImported, type ImportedStore } from '../data/importedStore';
+import { parseOfficialFiles } from '../data/official/importFiles';
 import { sampleDataSource } from '../data/sampleDataSource';
 import { analysisRecordListSchema, dataSourceKindSchema } from '../domain/schemas';
-import type { AnalysisRecord, Dataset, DataSourceKind, Result } from '../domain/types';
+import type { AnalysisRecord, Dataset, DataSourceKind, HistoricalRace, Result } from '../domain/types';
 import { loadJson, saveJson } from '../utils/storage';
 
 // ---- 設定 ----
@@ -31,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const SETTINGS_KEY = 'boat-analyzer:settings:v1';
 const RECORDS_KEY = 'boat-analyzer:records:v1';
+const trainingKey = (source: DataSourceKind) => `boat-analyzer:training:v1:${source}`;
 
 export type DataState =
   | { status: 'loading' }
@@ -46,18 +59,39 @@ export interface LoadLogEntry {
 
 export type Prediction = Result<WinProbabilityEstimate, ModelError>;
 
+export interface ImportOutcome {
+  files: number;
+  schedules: number;
+  results: number;
+  issues: string[];
+}
+
 interface AppStateValue {
   settings: Settings;
   updateSettings: (patch: Partial<Settings>) => void;
   data: DataState;
   reload: () => void;
   loadLog: LoadLogEntry[];
+  /** 選べるモデル（同梱モデル＋学習済みモデル） */
+  models: PredictionModel[];
+  /** 現在選択中のモデル */
+  model: PredictionModel;
+  /** 過去レース＋確定レース（重複なし）。場別統計とモデルの基礎データ */
+  historicalAll: HistoricalRace[];
+  modelContext: ModelContext | null;
   /** 現在のモデルによるレース別1着確率（データ読み込み後に計算） */
   predictions: Map<string, Prediction>;
+  trainingReport: TrainingReport | null;
+  runTraining: () => TrainingResult | null;
+  clearTraining: () => void;
   records: AnalysisRecord[];
   addRecord: (r: Omit<AnalysisRecord, 'id' | 'createdAt' | 'source' | 'stake'>) => void;
   removeRecord: (id: string) => void;
   clearRecords: (source?: DataSourceKind) => void;
+  /** 書き出した記録の読み込み。同じIDは上書きしない。追加件数を返す */
+  importRecords: (list: AnalysisRecord[]) => number;
+  importOfficialFiles: (files: { name: string; bytes: Uint8Array }[]) => Promise<ImportOutcome>;
+  clearImported: () => Promise<void>;
 }
 
 const AppStateContext = createContext<AppStateValue | null>(null);
@@ -70,12 +104,30 @@ export function nowIso(): string {
   return d.toISOString().replace(/\.\d{3}Z$/, '+09:00');
 }
 
-export function AppStateProvider({ children, sources = SOURCES }: { children: ReactNode; sources?: Record<DataSourceKind, DataSource> }) {
+/** 既存の記録に、IDが重複しないものだけを追加する */
+export function mergeRecords(current: readonly AnalysisRecord[], incoming: readonly AnalysisRecord[]): AnalysisRecord[] {
+  const ids = new Set(current.map((r) => r.id));
+  return [...current, ...incoming.filter((r) => !ids.has(r.id))].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function AppStateProvider({
+  children,
+  sources = SOURCES,
+  importedStore = indexedDbImportedStore,
+}: {
+  children: ReactNode;
+  sources?: Record<DataSourceKind, DataSource>;
+  importedStore?: ImportedStore;
+}) {
   const [settings, setSettings] = useState<Settings>(() => loadJson(SETTINGS_KEY, settingsSchema, DEFAULT_SETTINGS));
   const [data, setData] = useState<DataState>({ status: 'loading' });
   const [loadLog, setLoadLog] = useState<LoadLogEntry[]>([]);
   const [reloadToken, setReloadToken] = useState(0);
   const [records, setRecords] = useState<AnalysisRecord[]>(() => loadJson(RECORDS_KEY, analysisRecordListSchema, []));
+  const [reports, setReports] = useState<Record<DataSourceKind, TrainingReport | null>>(() => ({
+    sample: loadJson(trainingKey('sample'), trainingReportSchema.nullable(), null),
+    actual: loadJson(trainingKey('actual'), trainingReportSchema.nullable(), null),
+  }));
 
   useEffect(() => {
     saveJson(SETTINGS_KEY, settings);
@@ -108,14 +160,25 @@ export function AppStateProvider({ children, sources = SOURCES }: { children: Re
     };
   }, [settings.dataMode, reloadToken, sources]);
 
+  const trainingReport = reports[settings.dataMode];
+  const models = useMemo(
+    () => (trainingReport ? [trainedModelFromReport(trainingReport), ...BUILTIN_MODELS] : [...BUILTIN_MODELS]),
+    [trainingReport],
+  );
+  const model = findModel(models, settings.modelId);
+
+  const historicalAll = useMemo(
+    () => (data.status === 'ready' ? mergeHistorical(data.dataset.historicalRaces, data.dataset.races) : []),
+    [data],
+  );
+  const modelContext = useMemo(() => (data.status === 'ready' ? createModelContext(historicalAll) : null), [data, historicalAll]);
+
   const predictions = useMemo(() => {
     const map = new Map<string, Prediction>();
-    if (data.status !== 'ready') return map;
-    const model = getModel(settings.modelId);
-    const ctx = { historicalRaces: data.dataset.historicalRaces };
-    for (const race of data.dataset.races) map.set(race.id, model.predictWin(race, ctx));
+    if (data.status !== 'ready' || !modelContext) return map;
+    for (const race of data.dataset.races) map.set(race.id, model.predictWin(race, modelContext));
     return map;
-  }, [data, settings.modelId]);
+  }, [data, model, modelContext]);
 
   const updateSettings = useCallback((patch: Partial<Settings>) => {
     setSettings((s) => {
@@ -140,17 +203,69 @@ export function AppStateProvider({ children, sources = SOURCES }: { children: Re
     [settings.dataMode, settings.stake],
   );
 
+  const runTraining = (): TrainingResult | null => {
+    if (data.status !== 'ready' || !modelContext) return null;
+    const result = trainModel(data.dataset.races, modelContext, {
+      dataSource: settings.dataMode,
+      isDemoData: data.dataset.meta.isDemo,
+      trainedAt: nowIso(),
+    });
+    if (result.ok) {
+      saveJson(trainingKey(settings.dataMode), result.report);
+      setReports((r) => ({ ...r, [settings.dataMode]: result.report }));
+    }
+    return result;
+  };
+
+  const clearTraining = () => {
+    saveJson(trainingKey(settings.dataMode), null);
+    setReports((r) => ({ ...r, [settings.dataMode]: null }));
+    if (settings.modelId === 'trained') updateSettings({ modelId: DEFAULT_SETTINGS.modelId });
+  };
+
+  const importOfficialFiles = async (files: { name: string; bytes: Uint8Array }[]): Promise<ImportOutcome> => {
+    const parsed = parseOfficialFiles(files, nowIso());
+    if (parsed.data.files.length > 0) {
+      const prev = await importedStore.load().catch(() => null);
+      await importedStore.save(mergeImported(prev, parsed.data));
+      if (settings.dataMode === 'actual') setReloadToken((t) => t + 1);
+    }
+    return {
+      files: parsed.data.files.length,
+      schedules: parsed.data.schedules.length,
+      results: parsed.data.results.length,
+      issues: parsed.issues,
+    };
+  };
+
   const value: AppStateValue = {
     settings,
     updateSettings,
     data,
     reload: () => setReloadToken((t) => t + 1),
     loadLog,
+    models,
+    model,
+    historicalAll,
+    modelContext,
     predictions,
+    trainingReport,
+    runTraining,
+    clearTraining,
     records,
     addRecord,
     removeRecord: (id) => setRecords((list) => list.filter((r) => r.id !== id)),
     clearRecords: (source) => setRecords((list) => (source ? list.filter((r) => r.source !== source) : [])),
+    importRecords: (list) => {
+      const added = list.filter((r) => !records.some((x) => x.id === r.id)).length;
+      setRecords((cur) => mergeRecords(cur, list));
+      return added;
+    },
+    importOfficialFiles,
+    clearImported: async () => {
+      await importedStore.clear();
+      if (settings.dataMode === 'actual') setReloadToken((t) => t + 1);
+    },
   };
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;

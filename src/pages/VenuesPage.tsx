@@ -11,6 +11,7 @@ import {
 import { BarChart } from '../components/BarChart';
 import { BoatBadge } from '../components/Badges';
 import { DataGate } from '../components/DataGate';
+import { useAppState } from '../state/AppState';
 import { EmptyState } from '../components/StateViews';
 import type { Dataset } from '../domain/types';
 import { formatDate, formatPercent } from '../utils/format';
@@ -20,13 +21,14 @@ import { venueName } from '../utils/race';
 export const SMALL_SAMPLE_WARNING = 100;
 
 function VenueStatsView({ dataset }: { dataset: Dataset }) {
+  const { historicalAll } = useAppState();
   const [filter, setFilter] = useState<VenueStatsFilter>({ venueId: 'all', windBand: 'all', waveBand: 'all' });
-  const venueIds = useMemo(() => [...new Set(dataset.historicalRaces.map((r) => r.venueId))].sort(), [dataset]);
-  const target = useMemo(() => filterHistoricalRaces(dataset.historicalRaces, filter), [dataset, filter]);
+  const venueIds = useMemo(() => [...new Set(historicalAll.map((r) => r.venueId))].sort(), [historicalAll]);
+  const target = useMemo(() => filterHistoricalRaces(historicalAll, filter), [historicalAll, filter]);
   const stats = useMemo(() => computeCourseStats(target), [target]);
   const set = (patch: Partial<VenueStatsFilter>) => setFilter((f) => ({ ...f, ...patch }));
 
-  if (dataset.historicalRaces.length === 0) {
+  if (historicalAll.length === 0) {
     return <EmptyState title="過去レースデータがありません">場別統計には過去の競走成績データが必要です。</EmptyState>;
   }
 

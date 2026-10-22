@@ -1,20 +1,24 @@
 import type { BetType, HistoricalRace, Race } from '../domain/types';
 import { err, ok, type Result } from '../domain/types';
 import { allCombos, comboKey } from './combinations';
-import { computeCourseStats, filterHistoricalRaces } from './venueStats';
+import { CourseRateIndex } from './courseRates';
 
 /**
  * 推定確率モデル
  *
  * モデルは「各艇の1着確率」を返す。2連単・3連単の確率は Harville 法で1着確率から導く。
- * すべてのモデルは PredictionModel インターフェースに従うため、将来のモデル追加や
- * 過去データでの検証（evaluation.ts）を同じ手順で行える。
- *
- * 重要: 同梱モデルの係数は検証されていない仮の値であり、確率の精度は保証されない。
+ * 同梱モデルはすべて「特徴量 × 係数」の条件付きロジット（多項ロジット）で表す。
+ *   スコア_i = Σ 係数_k × 特徴量_ik、 P(i が1着) = exp(スコア_i) ÷ Σ_j exp(スコア_j)
+ * 係数を固定したものがデモモデル、過去データから推定したものが学習モデル（training.ts）。
  */
 
 export interface ModelContext {
-  historicalRaces: readonly HistoricalRace[];
+  /** 場・コース別の累計（予測対象レースの日付より前だけを使う） */
+  courseIndex: CourseRateIndex;
+}
+
+export function createModelContext(historical: readonly HistoricalRace[]): ModelContext {
+  return { courseIndex: new CourseRateIndex(historical) };
 }
 
 export interface WinProbabilityEstimate {
@@ -24,7 +28,7 @@ export interface WinProbabilityEstimate {
   usedFactors: string[];
   /** 欠損のため使わなかった要素（0埋めはしない） */
   missingFactors: string[];
-  /** 根拠とした過去レース数 */
+  /** 根拠とした過去レース数（対象レースの日付より前） */
   sampleSize: number;
 }
 
@@ -39,7 +43,7 @@ export interface PredictionModel {
   id: string;
   name: string;
   description: string;
-  /** 過去データで精度を検証済みか（同梱モデルはすべて false） */
+  /** 過去データで精度を検証済みか */
   validated: boolean;
   predictWin(race: Race, ctx: ModelContext): Result<WinProbabilityEstimate, ModelError>;
 }
@@ -85,118 +89,185 @@ export function expectedCourses(race: Race): { courses: number[]; fromExhibition
 const SMOOTHING_STARTS = 30;
 /** 全場平均のラプラス平滑化（1着0回のコースでも確率を厳密な0にしない） */
 const LAPLACE_ALPHA = 1;
-const MIN_HISTORICAL_RACES = 30;
+export const MIN_HISTORICAL_RACES = 30;
 
-/** 場・コース別の1着率（全場平均で平滑化）。データ不足なら error */
+/** before（YYYY-MM-DD）より前の過去レースによる、場・コース別の1着率（全場平均で平滑化）。不足なら error */
 export function courseWinRates(
+  index: CourseRateIndex,
   venueId: string,
-  historical: readonly HistoricalRace[],
+  before: string,
 ): Result<{ rates: number[]; sampleSize: number }, ModelError> {
-  const all = computeCourseStats(historical);
-  if (all.sampleRaces < MIN_HISTORICAL_RACES) {
+  const all = index.allBefore(before);
+  if (all.races < MIN_HISTORICAL_RACES) {
     return err({
       code: 'insufficient_data',
-      message: `過去レースが${MIN_HISTORICAL_RACES}件未満のため推定できません（${all.sampleRaces}件）`,
+      message: `対象日より前の過去レースが${MIN_HISTORICAL_RACES}件未満のため推定できません（${all.races}件）`,
     });
   }
-  const venueStats = computeCourseStats(filterHistoricalRaces(historical, { venueId, windBand: 'all', waveBand: 'all' }));
-  const rates = venueStats.courses.map((c, i) => {
-    const a = all.courses[i];
-    const prior = a ? (a.wins + LAPLACE_ALPHA) / (a.starts + 6 * LAPLACE_ALPHA) : 1 / 6;
-    return (c.wins + SMOOTHING_STARTS * prior) / (c.starts + SMOOTHING_STARTS);
+  const venue = index.venueBefore(venueId, before);
+  const rates = venue.wins.map((w, i) => {
+    const prior = (all.wins[i]! + LAPLACE_ALPHA) / (all.starts[i]! + 6 * LAPLACE_ALPHA);
+    return (w + SMOOTHING_STARTS * prior) / (venue.starts[i]! + SMOOTHING_STARTS);
   });
-  return ok({ rates, sampleSize: venueStats.sampleRaces });
+  return ok({ rates, sampleSize: venue.races });
 }
 
-function entrantMask(race: Race): boolean[] {
-  return race.entries.map((e) => e.status === 'entered');
+// ---- 特徴量 ----
+
+export const FEATURES = [
+  { key: 'logCourse', label: '場・コース別1着率（対数）' },
+  { key: 'gradeA1', label: '級別A1' },
+  { key: 'gradeA2', label: '級別A2' },
+  { key: 'gradeB2', label: '級別B2' },
+  { key: 'nationalWinRate', label: '全国勝率（5.0との差）' },
+  { key: 'motorTwoRate', label: 'モーター2連率（35%との差、10%単位）' },
+  { key: 'exhibitionTime', label: '展示タイム（平均との差、0.1秒単位）' },
+] as const;
+
+export type FeatureKey = (typeof FEATURES)[number]['key'];
+export type Coefficients = Record<FeatureKey, number>;
+
+export interface RaceFeatures {
+  /** index 0 = 1号艇。欠場艇は null */
+  rows: (Record<FeatureKey, number> | null)[];
+  missing: string[];
+  fromExhibitionCourse: boolean;
+  sampleSize: number;
 }
+
+/**
+ * レースの特徴量。欠損値は「平均と同じ（差0）」として扱い、欠損として報告する。
+ * 確率を作るために値を捏造しないよう、欠損の一覧を必ず画面に出す。
+ */
+export function extractFeatures(race: Race, ctx: ModelContext): Result<RaceFeatures, ModelError> {
+  const base = courseWinRates(ctx.courseIndex, race.venueId, race.date);
+  if (!base.ok) return base;
+  const { courses, fromExhibition } = expectedCourses(race);
+  const missing: string[] = [];
+  if (!fromExhibition) missing.push('展示進入コース（枠なりと仮定）');
+  if (!race.exhibition) missing.push('展示情報（未発表）');
+
+  const exTimes = race.exhibition?.entries.map((e) => e.exhibitionTime) ?? [];
+  const available = exTimes.filter((t, i): t is number => t !== null && race.entries[i]?.status === 'entered');
+  const exMean = available.length >= 2 ? available.reduce((s, t) => s + t, 0) / available.length : null;
+
+  const rows = race.entries.map((e, i) => {
+    if (e.status !== 'entered') return null;
+    const boat = i + 1;
+    const nat = e.racer.nationalWinRate;
+    if (nat === null) missing.push(`全国勝率（${boat}号艇）`);
+    const motor = e.motor.twoRate;
+    if (motor === null) missing.push(`モーター2連率（${boat}号艇）`);
+    const t = exTimes[i];
+    const hasEx = exMean !== null && t !== null && t !== undefined;
+    if (race.exhibition && !hasEx) missing.push(`展示タイム（${boat}号艇）`);
+    return {
+      logCourse: Math.log(base.value.rates[(courses[i] ?? boat) - 1] ?? 1 / 6),
+      gradeA1: e.racer.grade === 'A1' ? 1 : 0,
+      gradeA2: e.racer.grade === 'A2' ? 1 : 0,
+      gradeB2: e.racer.grade === 'B2' ? 1 : 0,
+      nationalWinRate: nat === null ? 0 : nat - 5.0,
+      motorTwoRate: motor === null ? 0 : (motor - 35) / 10,
+      exhibitionTime: hasEx ? (t - exMean) / 0.1 : 0,
+    };
+  });
+  if (rows.every((r) => r === null)) return err({ code: 'no_entrants', message: '出走艇がありません' });
+  return ok({ rows, missing, fromExhibitionCourse: fromExhibition, sampleSize: base.value.sampleSize });
+}
+
+/** 係数と特徴量から1着確率（softmax）。欠場艇は0 */
+export function scoreProbabilities(rows: RaceFeatures['rows'], coef: Coefficients): number[] {
+  const scores = rows.map((r) => (r ? FEATURES.reduce((s, f) => s + coef[f.key] * r[f.key], 0) : null));
+  const max = Math.max(...scores.filter((s): s is number => s !== null));
+  const exps = scores.map((s) => (s === null ? 0 : Math.exp(s - max)));
+  const total = exps.reduce((a, b) => a + b, 0);
+  return exps.map((e) => e / total);
+}
+
+const FACTOR_OF: Partial<Record<FeatureKey, string>> = {
+  logCourse: '場・コース別1着率',
+  gradeA1: '級別',
+  gradeA2: '級別',
+  gradeB2: '級別',
+  nationalWinRate: '全国勝率',
+  motorTwoRate: 'モーター2連率',
+  exhibitionTime: '展示タイム',
+};
+
+/** 係数が0の要素は「使用要素」にも「欠損」にも出さない */
+function relevantMissing(missing: readonly string[], coef: Coefficients): string[] {
+  const active = new Set(FEATURES.filter((f) => coef[f.key] !== 0).map((f) => FACTOR_OF[f.key]));
+  return missing.filter((m) => {
+    if (m.startsWith('展示進入コース')) return coef.logCourse !== 0;
+    if (m.startsWith('展示情報')) return coef.exhibitionTime !== 0;
+    return [...active].some((a) => a && m.startsWith(a));
+  });
+}
+
+export function linearModel(def: Omit<PredictionModel, 'predictWin'> & { coefficients: Coefficients }): PredictionModel {
+  const coef = def.coefficients;
+  return {
+    id: def.id,
+    name: def.name,
+    description: def.description,
+    validated: def.validated,
+    predictWin(race, ctx) {
+      const f = extractFeatures(race, ctx);
+      if (!f.ok) return f;
+      const used = [...new Set(FEATURES.filter((x) => coef[x.key] !== 0).map((x) => FACTOR_OF[x.key]!))];
+      if (coef.logCourse !== 0 && f.value.fromExhibitionCourse) used.push('展示進入コース');
+      return ok({
+        probabilities: scoreProbabilities(f.value.rows, coef),
+        usedFactors: used,
+        missingFactors: relevantMissing(f.value.missing, coef),
+        sampleSize: f.value.sampleSize,
+      });
+    },
+  };
+}
+
+const ZERO: Coefficients = {
+  logCourse: 0,
+  gradeA1: 0,
+  gradeA2: 0,
+  gradeB2: 0,
+  nationalWinRate: 0,
+  motorTwoRate: 0,
+  exhibitionTime: 0,
+};
 
 /** モデル1: 場・コース別1着率のみ */
-export const courseBaselineModel: PredictionModel = {
+export const courseBaselineModel = linearModel({
   id: 'course-baseline',
   name: 'コース別基準モデル',
   description: '競艇場・進入コース別の過去1着率だけで推定します（選手・展示は考慮しません）。',
   validated: false,
-  predictWin(race, ctx) {
-    const base = courseWinRates(race.venueId, ctx.historicalRaces);
-    if (!base.ok) return base;
-    const { courses, fromExhibition } = expectedCourses(race);
-    const mask = entrantMask(race);
-    const probs = normalize(courses.map((c, i) => (mask[i] ? (base.value.rates[c - 1] ?? 0) : 0)));
-    if (!probs) return err({ code: 'no_entrants', message: '出走艇がありません' });
-    return ok({
-      probabilities: probs,
-      usedFactors: ['場・コース別1着率', fromExhibition ? '展示進入コース' : '枠なり想定'],
-      missingFactors: fromExhibition ? [] : ['展示進入コース'],
-      sampleSize: base.value.sampleSize,
-    });
-  },
+  coefficients: { ...ZERO, logCourse: 1 },
+});
+
+/** デモ用係数（未検証の仮の値）。学習モデルの初期値にも使う */
+export const DEMO_COEFFICIENTS: Coefficients = {
+  logCourse: 1,
+  gradeA1: 0.35,
+  gradeA2: 0.15,
+  gradeB2: -0.3,
+  nationalWinRate: 0.15,
+  motorTwoRate: 0.1,
+  exhibitionTime: -0.4,
 };
 
-/** デモ用係数（未検証の仮の値。将来は過去データで推定・検証して置き換える） */
-export const DEMO_COEFFICIENTS = {
-  grade: { A1: 0.35, A2: 0.15, B1: 0, B2: -0.3 } as Record<string, number>,
-  nationalWinRatePerPoint: 0.15,
-  nationalWinRateCenter: 5.0,
-  motorTwoRatePerPoint: 0.01,
-  motorTwoRateCenter: 35,
-  /** 展示タイムが平均より 0.1 秒速いと +0.4（対数オッズ） */
-  exhibitionTimePerSecond: -4,
-} as const;
-
 /** モデル2: コース別基準 × 選手・モーター・展示の補正（デモ係数） */
-export const demoCompositeModel: PredictionModel = {
+export const demoCompositeModel = linearModel({
   id: 'demo-composite',
   name: '複合デモモデル',
   description:
     'コース別1着率に、級別・全国勝率・モーター2連率・展示タイムによる補正をかけます。係数は未検証のデモ値です。',
   validated: false,
-  predictWin(race, ctx) {
-    const base = courseBaselineModel.predictWin(race, ctx);
-    if (!base.ok) return base;
-    const used = new Set(base.value.usedFactors);
-    const missing = new Set(base.value.missingFactors);
-    const c = DEMO_COEFFICIENTS;
+  coefficients: DEMO_COEFFICIENTS,
+});
 
-    const exTimes = race.exhibition?.entries.map((e) => e.exhibitionTime) ?? [];
-    const available = exTimes.filter((t, i): t is number => t !== null && race.entries[i]?.status === 'entered');
-    const exMean = available.length >= 2 ? available.reduce((s, t) => s + t, 0) / available.length : null;
-    if (!race.exhibition) missing.add('展示情報（未発表）');
+export const BUILTIN_MODELS: readonly PredictionModel[] = [demoCompositeModel, courseBaselineModel];
 
-    const weights = race.entries.map((entry, i) => {
-      const p = base.value.probabilities[i] ?? 0;
-      if (entry.status !== 'entered' || p <= 0) return 0;
-      let logit = c.grade[entry.racer.grade] ?? 0;
-      used.add('級別');
-      if (entry.racer.nationalWinRate !== null) {
-        logit += (entry.racer.nationalWinRate - c.nationalWinRateCenter) * c.nationalWinRatePerPoint;
-        used.add('全国勝率');
-      } else missing.add(`全国勝率（${i + 1}号艇）`);
-      if (entry.motor.twoRate !== null) {
-        logit += (entry.motor.twoRate - c.motorTwoRateCenter) * c.motorTwoRatePerPoint;
-        used.add('モーター2連率');
-      } else missing.add(`モーター2連率（${i + 1}号艇）`);
-      const t = exTimes[i];
-      if (exMean !== null && t !== null && t !== undefined) {
-        logit += (t - exMean) * c.exhibitionTimePerSecond;
-        used.add('展示タイム');
-      } else if (race.exhibition) missing.add(`展示タイム（${i + 1}号艇）`);
-      return p * Math.exp(logit);
-    });
-    const probs = normalize(weights);
-    if (!probs) return err({ code: 'no_entrants', message: '出走艇がありません' });
-    return ok({
-      probabilities: probs,
-      usedFactors: [...used],
-      missingFactors: [...missing],
-      sampleSize: base.value.sampleSize,
-    });
-  },
-};
-
-export const MODELS: readonly PredictionModel[] = [demoCompositeModel, courseBaselineModel];
-
-export function getModel(id: string): PredictionModel {
-  return MODELS.find((m) => m.id === id) ?? demoCompositeModel;
+export function findModel(models: readonly PredictionModel[], id: string): PredictionModel {
+  return models.find((m) => m.id === id) ?? models[0] ?? demoCompositeModel;
 }

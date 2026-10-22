@@ -5,10 +5,10 @@ import {
   DEFAULT_CANDIDATE_FILTER,
   filterCandidates,
   sortCandidates,
+  type BetCandidate,
   type CandidateFilter,
   type CandidateSortKey,
 } from '../analytics/candidates';
-import { MODELS, getModel } from '../analytics/probabilityModel';
 import { BoatBadge, DemoBadge, DivergenceMark, SignedRate } from '../components/Badges';
 import { DataGate } from '../components/DataGate';
 import { Disclaimer } from '../components/Disclaimer';
@@ -30,7 +30,7 @@ export function parseOptionalNumber(s: string): number | null | undefined {
 }
 
 function OddsView({ dataset }: { dataset: Dataset }) {
-  const { predictions, settings, updateSettings, addRecord } = useAppState();
+  const { predictions, settings, updateSettings, addRecord, records, models, model } = useAppState();
   const [params, setParams] = useSearchParams();
   const race = resolveRace(dataset, params.get('race'), (r) => r.odds !== null);
   const [filter, setFilter] = useState<CandidateFilter>({ ...DEFAULT_CANDIDATE_FILTER, betTypes: ['trifecta'] });
@@ -46,7 +46,6 @@ function OddsView({ dataset }: { dataset: Dataset }) {
   const all = useMemo(() => (race && winProbs ? buildCandidates(race, winProbs, BET_TYPES) : []), [race, winProbs]);
 
   if (!race) return <EmptyState title="レースデータがありません" />;
-  const model = getModel(settings.modelId);
 
   // 入力検証（不正な数値はフィルタに反映せずエラー表示）
   const minEv = parseOptionalNumber(minEvText);
@@ -67,6 +66,40 @@ function OddsView({ dataset }: { dataset: Dataset }) {
   const rows = sortCandidates(filterCandidates(all, effective), sortKey);
   const invalidCount = all.filter((c) => c.error && filter.betTypes.includes(c.betType)).length;
 
+  const isSaved = (c: BetCandidate) =>
+    records.some(
+      (r) => r.source === settings.dataMode && r.raceId === race.id && r.betType === c.betType && r.combination === c.combination,
+    );
+  const save = (c: BetCandidate) => {
+    if (c.error || c.odds === null || c.expectedReturnRate === null || isSaved(c)) return;
+    addRecord({
+      raceId: race.id,
+      raceLabel: raceLabel(dataset, race),
+      modelId: model.id,
+      betType: c.betType,
+      combination: c.combination,
+      odds: c.odds,
+      probability: c.probability,
+      expectedReturnRate: c.expectedReturnRate,
+      oddsFetchedAt: race.odds?.fetchedAt ?? null,
+    });
+    setSaved(`${BET_TYPE_LABEL[c.betType]} ${c.combination} を分析履歴に保存しました`);
+  };
+  const saveButton = (c: BetCandidate) => {
+    const done = isSaved(c);
+    return (
+      <button
+        type="button"
+        className="btn btn--small"
+        disabled={!!c.error || done}
+        onClick={() => save(c)}
+        aria-label={done ? `${c.combination} は保存済み` : `${BET_TYPE_LABEL[c.betType]} ${c.combination} を保存`}
+      >
+        {done ? '保存済み' : '保存'}
+      </button>
+    );
+  };
+
   const toggleBetType = (b: BetType) =>
     setFilter((f) => ({ ...f, betTypes: f.betTypes.includes(b) ? f.betTypes.filter((x) => x !== b) : [...f.betTypes, b] }));
 
@@ -79,9 +112,9 @@ function OddsView({ dataset }: { dataset: Dataset }) {
           <label className="field">
             <span>推定モデル</span>
             <select value={settings.modelId} onChange={(e) => updateSettings({ modelId: e.target.value })}>
-              {MODELS.map((m) => (
+              {models.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name}（未検証）
+                  {m.name}
                 </option>
               ))}
             </select>
@@ -106,10 +139,17 @@ function OddsView({ dataset }: { dataset: Dataset }) {
         )}
       </div>
 
-      {!pred || !pred.ok ? (
+      {!race.odds ? (
+        dataset.meta.isDemo ? (
+          <EmptyState title="オッズが未発表です">オッズ発表後にデータを更新してください。期待値は計算できません。</EmptyState>
+        ) : (
+          <EmptyState title="オッズがありません">
+            公式のダウンロードデータ（番組表・競走成績）にはオッズが含まれないため、期待値は計算できません。推定1着確率は
+            <a href={`#/races/${race.id}`}>出走表</a>で確認できます。
+          </EmptyState>
+        )
+      ) : !pred || !pred.ok ? (
         <EmptyState title="推定確率を計算できません">{pred && !pred.ok ? pred.error.message : '予測がありません'}</EmptyState>
-      ) : !race.odds ? (
-        <EmptyState title="オッズが未発表です">オッズ発表後にデータを更新してください。期待値は計算できません。</EmptyState>
       ) : (
         <>
           <h2>各艇の推定1着確率とオッズ</h2>
@@ -218,7 +258,36 @@ function OddsView({ dataset }: { dataset: Dataset }) {
           {rows.length === 0 ? (
             <EmptyState title="条件に合う買い目がありません">条件を緩めるか、券種を選択してください。</EmptyState>
           ) : (
-            <div className="table-wrap">
+            <>
+            <ul className="cand-cards only-mobile" data-testid="candidate-cards">
+              {rows.slice(0, limit).map((c) => (
+                <li key={`${c.betType}:${c.combination}`} className="cand-card">
+                  <div className="cand-card__head">
+                    <span className="muted small">{BET_TYPE_LABEL[c.betType]}</span>
+                    <span className="combo">{c.combination}</span>
+                    {saveButton(c)}
+                  </div>
+                  <dl className="kv">
+                    <dt>オッズ</dt>
+                    <dd>{formatOdds(c.odds, 'データなし')}</dd>
+                    <dt>推定確率</dt>
+                    <dd>{formatPercent(c.probability, 2)}</dd>
+                    <dt>期待収益率</dt>
+                    <dd>
+                      {c.error ? (
+                        <span className="muted small">算出不可：{c.error.message}</span>
+                      ) : (
+                        <>
+                          <SignedRate value={c.expectedReturnRate} text={formatSignedPercent(c.expectedReturnRate)} />
+                          <DivergenceMark warnings={c.warnings} />
+                        </>
+                      )}
+                    </dd>
+                  </dl>
+                </li>
+              ))}
+            </ul>
+            <div className="table-wrap only-desktop">
               <table className="table" data-testid="candidate-table">
                 <thead>
                   <tr>
@@ -253,34 +322,14 @@ function OddsView({ dataset }: { dataset: Dataset }) {
                         )}
                       </td>
                       <td>
-                        <button
-                          type="button"
-                          className="btn btn--small"
-                          disabled={!!c.error}
-                          onClick={() => {
-                            if (c.error || c.odds === null || c.expectedReturnRate === null) return;
-                            addRecord({
-                              raceId: race.id,
-                              raceLabel: raceLabel(dataset, race),
-                              modelId: model.id,
-                              betType: c.betType,
-                              combination: c.combination,
-                              odds: c.odds,
-                              probability: c.probability,
-                              expectedReturnRate: c.expectedReturnRate,
-                              oddsFetchedAt: race.odds?.fetchedAt ?? null,
-                            });
-                            setSaved(`${BET_TYPE_LABEL[c.betType]} ${c.combination} を分析履歴に保存しました`);
-                          }}
-                        >
-                          保存
-                        </button>
+                        {saveButton(c)}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            </>
           )}
           {rows.length > limit && (
             <button type="button" className="btn btn--ghost" onClick={() => setLimit((l) => l + PAGE_SIZE)}>

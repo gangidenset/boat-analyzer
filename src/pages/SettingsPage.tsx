@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { MODELS } from '../analytics/probabilityModel';
+import { useRef, useState, type ChangeEvent } from 'react';
+import { analysisRecordListSchema } from '../domain/schemas';
 import { DemoBadge } from '../components/Badges';
 import { ErrorState, LoadingState } from '../components/StateViews';
 import type { DataSourceKind } from '../domain/types';
@@ -41,8 +41,135 @@ export function DataStatusTable() {
   );
 }
 
+/** 公式データ（番組表B・競走成績K）の取り込み */
+function ImportPanel() {
+  const { importOfficialFiles, clearImported, settings, updateSettings } = useAppState();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; lines: string[] } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const onFiles = async (e: ChangeEvent<HTMLInputElement>) => {
+    const list = [...(e.target.files ?? [])];
+    if (list.length === 0) return;
+    setBusy(true);
+    try {
+      const files = await Promise.all(list.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })));
+      const r = await importOfficialFiles(files);
+      setResult({
+        ok: r.files > 0,
+        lines: [
+          `${r.files}ファイルを取り込みました（番組表 ${r.schedules}レース／競走成績 ${r.results}レース）`,
+          ...r.issues.slice(0, 20),
+          ...(r.issues.length > 20 ? [`…ほか${r.issues.length - 20}件`] : []),
+        ],
+      });
+    } catch (err) {
+      setResult({ ok: false, lines: ['取り込みに失敗しました', err instanceof Error ? err.message : String(err)] });
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  };
+
+  return (
+    <div className="panel">
+      <h2>実データの取り込み</h2>
+      <ol className="small steps">
+        <li>
+          BOATRACE公式サイトのデータダウンロードページで、番組表（B）・競走成績（K）のファイルを<strong>ご自身で</strong>ダウンロードする（利用条件は公式サイトで確認してください）。
+        </li>
+        <li>LZH形式なので、7-Zip などで解凍してテキストファイル（例：B251020.TXT、K251020.TXT）を取り出す。</li>
+        <li>下のボタンでテキストファイルを選ぶ（複数可）。データはこの端末のブラウザ内にだけ保存されます。</li>
+      </ol>
+      <div className="button-row">
+        <label className="btn">
+          {busy ? '取り込み中…' : 'ファイルを選んで取り込む'}
+          <input ref={inputRef} type="file" accept=".txt,.TXT,text/plain" multiple hidden onChange={onFiles} disabled={busy} />
+        </label>
+        {settings.dataMode !== 'actual' && (
+          <button type="button" className="btn btn--ghost" onClick={() => updateSettings({ dataMode: 'actual' })}>
+            実データモードに切り替える
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn--danger"
+          onClick={async () => {
+            if (window.confirm('取り込んだ実データをすべて削除します。よろしいですか？')) {
+              await clearImported();
+              setResult({ ok: true, lines: ['取り込んだ実データを削除しました'] });
+            }
+          }}
+        >
+          取り込んだデータを削除
+        </button>
+      </div>
+      {result && (
+        <ul className={result.ok ? 'log' : 'log warn'} role="status">
+          {result.lines.map((l, i) => (
+            <li key={i}>{l}</li>
+          ))}
+        </ul>
+      )}
+      <p className="muted small">公式データにはオッズ・直線・回り足・周回展示が含まれないため、実データでは期待値と一部の展示項目は表示できません。</p>
+    </div>
+  );
+}
+
+/** 分析記録の書き出し・読み込み（端末間の移行・バックアップ用） */
+function RecordsBackup() {
+  const { records, importRecords } = useAppState();
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const exportRecords = () => {
+    const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `boat-analyzer-records-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const parsed = analysisRecordListSchema.safeParse(JSON.parse(await file.text()));
+      if (!parsed.success) {
+        setMsg({ ok: false, text: 'BOAT ANALYZER で書き出した分析記録のファイルではありません' });
+        return;
+      }
+      const added = importRecords(parsed.data);
+      setMsg({ ok: true, text: `${added}件を追加しました（重複${parsed.data.length - added}件は追加していません）` });
+    } catch {
+      setMsg({ ok: false, text: 'ファイルを読み込めませんでした（JSON形式ではありません）' });
+    }
+  };
+
+  return (
+    <>
+      <div className="button-row">
+        <button type="button" className="btn btn--ghost" onClick={exportRecords} disabled={records.length === 0}>
+          分析記録を書き出す（JSON）
+        </button>
+        <label className="btn btn--ghost">
+          分析記録を読み込む
+          <input type="file" accept=".json,application/json" hidden onChange={onFile} aria-label="分析記録ファイル" />
+        </label>
+      </div>
+      {msg && (
+        <p className={msg.ok ? 'ok-msg' : 'warn'} role="status">
+          {msg.text}
+        </p>
+      )}
+    </>
+  );
+}
+
 export function SettingsPage() {
-  const { settings, updateSettings, data, reload, loadLog, clearRecords, records } = useAppState();
+  const { settings, updateSettings, data, reload, loadLog, clearRecords, records, models } = useAppState();
   const [evText, setEvText] = useState(String(Math.round(settings.minExpectedReturnRate * 1000) / 10));
   const [probText, setProbText] = useState(String(Math.round(settings.minProbability * 1000) / 10));
   const [errors, setErrors] = useState<string[]>([]);
@@ -76,11 +203,15 @@ export function SettingsPage() {
             </label>
           ))}
         </fieldset>
-        <p className="muted small">実データモードは取得元が未設定のため、現在はエラー表示になります（外部通信は行いません）。</p>
+        <p className="muted small">
+          実データモードでは、下の「実データの取り込み」で読み込んだ公式の番組表・競走成績を使います。アプリが外部へ通信することはありません。
+        </p>
         <button type="button" className="btn" onClick={reload}>
           データを再読み込み
         </button>
       </div>
+
+      <ImportPanel />
 
       <div className="panel">
         <h2>データ取得元</h2>
@@ -112,7 +243,7 @@ export function SettingsPage() {
           <label className="field">
             <span>推定モデル</span>
             <select value={settings.modelId} onChange={(e) => updateSettings({ modelId: e.target.value })}>
-              {MODELS.map((m) => (
+              {models.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
                 </option>
@@ -172,6 +303,7 @@ export function SettingsPage() {
       <div className="panel">
         <h2>保存データ</h2>
         <p className="muted small">分析記録 {records.length} 件はこのブラウザ（localStorage）にのみ保存され、外部へ送信されません。</p>
+        <RecordsBackup />
         <button
           type="button"
           className="btn btn--danger"

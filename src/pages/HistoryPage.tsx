@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { evaluateModel } from '../analytics/evaluation';
 import { settleRecord, summarizeHistory, type HistorySummary, type SettlementStatus } from '../analytics/history';
-import { MODELS, getModel } from '../analytics/probabilityModel';
+import { FEATURES } from '../analytics/probabilityModel';
+import { MIN_TRAIN_RACES, MIN_VALIDATE_RACES, VALIDATED_MIN_RACES } from '../analytics/training';
 import { DemoBadge, SignedRate } from '../components/Badges';
 import { DataGate } from '../components/DataGate';
 import { EmptyState } from '../components/StateViews';
@@ -47,14 +48,14 @@ function SummaryCard({ s }: { s: HistorySummary }) {
 }
 
 function HistoryView({ dataset }: { dataset: Dataset }) {
-  const { records, removeRecord, clearRecords, settings } = useAppState();
+  const { records, removeRecord, clearRecords, settings, models, modelContext } = useAppState();
   const settled = useMemo(() => {
     const byId = new Map(dataset.races.map((r) => [r.id, r]));
     return records.map((r) => settleRecord(r, byId.get(r.raceId)));
   }, [records, dataset]);
   const evaluations = useMemo(
-    () => MODELS.map((m) => ({ model: m, ev: evaluateModel(m, dataset.races, { historicalRaces: dataset.historicalRaces }) })),
-    [dataset],
+    () => (modelContext ? models.map((m) => ({ model: m, ev: evaluateModel(m, dataset.races, modelContext) })) : []),
+    [dataset, models, modelContext],
   );
   const currentSettled = settled.filter((s) => s.record.source === settings.dataMode);
   const otherCount = settled.length - currentSettled.length;
@@ -97,7 +98,7 @@ function HistoryView({ dataset }: { dataset: Dataset }) {
                   <td className="small">{formatDateTime(r.createdAt)}</td>
                   <td>
                     <Link to={`/races/${r.raceId}`}>{r.raceLabel}</Link>
-                    <div className="muted small">{getModel(r.modelId).name}</div>
+                    <div className="muted small">{models.find((m) => m.id === r.modelId)?.name ?? r.modelId}</div>
                   </td>
                   <td>
                     {BET_TYPE_LABEL[r.betType]} <span className="combo">{r.combination}</span>
@@ -137,9 +138,11 @@ function HistoryView({ dataset }: { dataset: Dataset }) {
         </button>
       )}
 
+      <TrainingPanel />
+
       <h2>モデル検証（確定レースでの当てはまり）</h2>
       <p className="muted small">
-        確定済みレースで各モデルの1着確率を評価します。{dataset.meta.isDemo && <><DemoBadge /> サンプルデータでの結果は実際の予測精度を示しません。</>}
+        確定済みレース全体で各モデルの1着確率を評価します（各レースの日付より前のデータだけで予測）。学習モデルはこの中に学習に使ったレースを含むため、公平な比較は上の「検証期間」の表を見てください。{dataset.meta.isDemo && <><DemoBadge /> サンプルデータでの結果は実際の予測精度を示しません。</>}
         Brierスコア・対数損失は小さいほど良く、全艇同確率の予測ではそれぞれ約0.83・約1.79です。
       </p>
       <div className="table-wrap">
@@ -167,6 +170,118 @@ function HistoryView({ dataset }: { dataset: Dataset }) {
         </table>
       </div>
     </>
+  );
+}
+
+function TrainingPanel() {
+  const { runTraining, clearTraining, trainingReport: report, updateSettings, settings } = useAppState();
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [running, setRunning] = useState(false);
+
+  const onTrain = () => {
+    setRunning(true);
+    // 画面に「学習中」を出してから計算する
+    setTimeout(() => {
+      const r = runTraining();
+      setRunning(false);
+      if (!r) setMessage({ ok: false, text: 'データが読み込まれていません' });
+      else if (!r.ok) setMessage({ ok: false, text: r.reason });
+      else setMessage({ ok: true, text: `学習しました（学習用${r.report.trainRaces}レース・検証用${r.report.validateRaces}レース）` });
+    }, 30);
+  };
+
+  return (
+    <section className="panel" aria-labelledby="training-title">
+      <h2 id="training-title">モデルの学習と検証</h2>
+      <p className="muted small">
+        確定レースを日付順に分け、古い約80%で係数を推定（条件付きロジット）し、残りの新しい期間で精度を比べます。学習用{MIN_TRAIN_RACES}
+        件・検証用{MIN_VALIDATE_RACES}件以上が必要です。実データで検証用{VALIDATED_MIN_RACES}件以上、かつ基準モデルより良い場合だけ「検証済み」になります。
+      </p>
+      <div className="button-row">
+        <button type="button" className="btn" onClick={onTrain} disabled={running}>
+          {running ? '学習中…' : report ? '学習し直す' : '学習を実行'}
+        </button>
+        {report && settings.modelId !== 'trained' && (
+          <button type="button" className="btn btn--ghost" onClick={() => updateSettings({ modelId: 'trained' })}>
+            学習モデルを使う
+          </button>
+        )}
+        {report && (
+          <button type="button" className="btn btn--ghost" onClick={clearTraining}>
+            学習結果を削除
+          </button>
+        )}
+      </div>
+      {message && (
+        <p className={message.ok ? 'ok-msg' : 'warn'} role="status">
+          {message.text}
+        </p>
+      )}
+      {report && (
+        <>
+          <p className="small">
+            {report.validated ? (
+              <span className="pos">✓ 検証済み</span>
+            ) : (
+              <span className="warn">⚠ 未検証</span>
+            )}{' '}
+            学習期間 {report.trainPeriod ? `${report.trainPeriod.from}〜${report.trainPeriod.to}` : '—'}（{report.trainRaces}レース）／ 検証期間{' '}
+            {report.validatePeriod ? `${report.validatePeriod.from}〜${report.validatePeriod.to}` : '—'}（{report.validateRaces}レース）
+            {report.isDemoData && (
+              <>
+                {' '}
+                <DemoBadge /> デモデータでの学習のため、実際の精度は示しません。
+              </>
+            )}
+          </p>
+          <div className="table-wrap">
+            <table className="table" data-testid="validation-table">
+              <caption className="sr-only">検証期間での比較</caption>
+              <thead>
+                <tr>
+                  <th scope="col">モデル（検証期間）</th>
+                  <th scope="col" className="num">レース数</th>
+                  <th scope="col" className="num">対数損失</th>
+                  <th scope="col" className="num">Brier</th>
+                  <th scope="col" className="num">本命1着率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.metrics.map((m) => (
+                  <tr key={m.modelId}>
+                    <td>{m.name}</td>
+                    <td className="num">{m.n}</td>
+                    <td className="num">{formatNumber(m.logLoss, 3)}</td>
+                    <td className="num">{formatNumber(m.brierScore, 3)}</td>
+                    <td className="num">{formatPercent(m.top1HitRate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="small">
+            {report.improvedOverBaseline
+              ? '検証期間で、学習モデルの対数損失は基準モデルより小さくなりました（小さいほど良い）。'
+              : '検証期間で、学習モデルは基準モデルを上回れませんでした。データを増やして学習し直してください。'}
+          </p>
+          <details>
+            <summary className="small">推定された係数</summary>
+            <div className="table-wrap">
+              <table className="table">
+                <tbody>
+                  {FEATURES.map((f) => (
+                    <tr key={f.key}>
+                      <th scope="row">{f.label}</th>
+                      <td className="num">{report.coefficients[f.key].toFixed(3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </>
+      )}
+    </section>
   );
 }
 

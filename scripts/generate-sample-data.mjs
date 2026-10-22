@@ -86,8 +86,9 @@ function weatherSample() {
 // ---- 過去レース（場別・コース別統計用） ----
 const HIST_VENUES = ['01', '02', '04', '12', '18', '24'];
 const historical = [];
-for (let d = 0; d < 30; d++) {
-  const date = new Date(Date.UTC(2026, 8, 21 + d)); // 2026-09-21 〜 2026-10-20
+// 軽量形式の過去レースは 10/6 まで。10/7〜10/20 は出走表付きの確定レース（学習・検証用）として下で生成する
+for (let d = 0; d < 16; d++) {
+  const date = new Date(Date.UTC(2026, 8, 21 + d)); // 2026-09-21 〜 2026-10-06
   const dateStr = date.toISOString().slice(0, 10);
   for (const venueId of HIST_VENUES) {
     // 開催日は各場おおむね半分
@@ -207,9 +208,16 @@ function buildOdds(marketWeights, absentBoats, fetchedAt) {
 
 // ---- 開催レース（出走表・展示・オッズ・結果） ----
 const RACE_TITLES = ['予選', '予選', '一般戦', '一般戦', '特選', '準優勝戦', '選抜戦'];
+// 学習・検証用の確定レース（公式ダウンロードデータと同じくオッズなし）
+const TRAINING_DAYS = Array.from({ length: 14 }, (_, d) => {
+  const date = new Date(Date.UTC(2026, 9, 7 + d)).toISOString().slice(0, 10); // 2026-10-07 〜 2026-10-20
+  const venues = [0, 1, 2].map((k) => HIST_VENUES[(d + k * 2) % HIST_VENUES.length]).sort();
+  return { date, venues, finished: true, withOdds: false };
+});
 const SCHEDULE = [
-  { date: '2026-10-21', venues: ['02', '12', '24'], finished: true },
-  { date: '2026-10-22', venues: ['01', '12', '24'], finished: false },
+  ...TRAINING_DAYS,
+  { date: '2026-10-21', venues: ['02', '12', '24'], finished: true, withOdds: true },
+  { date: '2026-10-22', venues: ['01', '12', '24'], finished: false, withOdds: true },
 ];
 const races = [];
 for (const day of SCHEDULE) {
@@ -247,6 +255,7 @@ for (const day of SCHEDULE) {
 
       // 展示情報：本日の後半レースは未発表
       const exhibitionPublished = day.finished || raceNo <= 8;
+      // 学習用の日はオッズを持たない（払戻金の計算にだけ市場オッズを使う）
       const w = weatherSample();
       let exhibition = null;
       if (exhibitionPublished) {
@@ -286,7 +295,8 @@ for (const day of SCHEDULE) {
       const fetchedAt = day.finished
         ? `${day.date}T${deadline}:00+09:00`
         : `${day.date}T09:00:00+09:00`;
-      const odds = oddsMissing ? null : buildOdds(marketWeights, absentBoats, fetchedAt);
+      const market = buildOdds(marketWeights, absentBoats, fetchedAt);
+      const odds = oddsMissing || !day.withOdds ? null : market;
 
       let result = null;
       if (day.finished) {
@@ -297,9 +307,9 @@ for (const day of SCHEDULE) {
           finishOrder: order,
           kimarite: kimariteFor(a),
           payouts: {
-            win: { combination: `${a}`, payout: Math.round((odds.win[`${a}`] ?? 1) * 100) },
-            exacta: { combination: `${a}-${b}`, payout: Math.round((odds.exacta[`${a}-${b}`] ?? 1) * 100) },
-            trifecta: { combination: `${a}-${b}-${c}`, payout: Math.round((odds.trifecta[`${a}-${b}-${c}`] ?? 1) * 100) },
+            win: { combination: `${a}`, payout: Math.round((market.win[`${a}`] ?? 1) * 100) },
+            exacta: { combination: `${a}-${b}`, payout: Math.round((market.exacta[`${a}-${b}`] ?? 1) * 100) },
+            trifecta: { combination: `${a}-${b}-${c}`, payout: Math.round((market.trifecta[`${a}-${b}-${c}`] ?? 1) * 100) },
           },
         };
       }
@@ -333,7 +343,7 @@ const meta = {
     exhibition: '2026-10-22T13:35:00+09:00',
     odds: '2026-10-22T09:00:00+09:00',
     results: '2026-10-21T21:00:00+09:00',
-    historical: '2026-10-21T06:00:00+09:00',
+    historical: '2026-10-07T06:00:00+09:00',
   },
 };
 

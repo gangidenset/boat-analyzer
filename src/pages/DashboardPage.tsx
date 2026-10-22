@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { findCandidatesAcrossRaces } from '../analytics/candidates';
 import { settleRecord, summarizeHistory } from '../analytics/history';
 import { raceInsight } from '../analytics/insights';
-import { getModel } from '../analytics/probabilityModel';
 import { BoatBadge, DivergenceMark, SignedRate } from '../components/Badges';
 import { DataGate } from '../components/DataGate';
 import { Disclaimer } from '../components/Disclaimer';
@@ -22,7 +21,7 @@ export function pickFocusDate(dataset: Dataset): string | null {
 }
 
 function Dashboard({ dataset }: { dataset: Dataset }) {
-  const { predictions, settings, records } = useAppState();
+  const { predictions, settings, records, model } = useAppState();
   const focusDate = pickFocusDate(dataset);
   const todays = dataset.races.filter((r) => r.date === focusDate);
   const winProbs = useMemo(() => {
@@ -76,7 +75,7 @@ function Dashboard({ dataset }: { dataset: Dataset }) {
         </div>
         <div className="stat">
           <span className="stat__label">推定モデル</span>
-          <span className="stat__value small">{getModel(settings.modelId).name}</span>
+          <span className="stat__value small">{model.name}</span>
         </div>
       </div>
 

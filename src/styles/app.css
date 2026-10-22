@@ -195,7 +195,6 @@ select, input[type='date'], input:not([type]), input[inputmode] {
 .chart__bar { fill: var(--accent-strong); }
 .chart__bar--hi { fill: var(--pos); }
 
-.only-mobile { display: none; }
 .entry-cards { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 8px; }
 .entry-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
 .entry-card.is-absent { opacity: 0.6; }
@@ -228,8 +227,22 @@ select, input[type='date'], input:not([type]), input[inputmode] {
   .content { padding: 14px 16px 90px; }
   .filters { display: grid; grid-template-columns: 1fr 1fr; }
   .filters .field select, .filters .field input { width: 100%; min-width: 0; }
-  .only-desktop { display: none; }
-  .only-mobile { display: grid; }
   .race-grid { grid-template-columns: 1fr; }
   h1 { font-size: 1.25rem; }
+}
+
+/* 候補のカード表示（スマートフォン） */
+.cand-cards { list-style: none; padding: 0; margin: 8px 0; gap: 8px; }
+.cand-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.cand-card__head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.cand-card__head .btn { margin-left: auto; }
+.steps { padding-left: 1.3em; margin: 6px 0 10px; }
+.steps li { margin-bottom: 4px; }
+details summary { cursor: pointer; margin: 6px 0; }
+
+/* 表示切り替え（最後に置き、各部品の display 指定より優先させる） */
+.only-mobile { display: none; }
+@media (max-width: 760px) {
+  .only-desktop { display: none; }
+  .only-mobile { display: grid; }
 }
