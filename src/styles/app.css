@@ -1,0 +1,235 @@
+/* BOAT ANALYZER - ダーク（紺）テーマ */
+:root {
+  --bg: #0a1430;
+  --surface: #101d40;
+  --surface-2: #16264f;
+  --border: #263a6e;
+  --text: #e6ebf5;
+  --muted: #9fb0d3;
+  --accent: #60a5fa;
+  --accent-strong: #3b82f6;
+  --pos: #34d399;
+  --neg: #f87171;
+  --warn: #fbbf24;
+  --na: #c4b5fd;
+  --radius: 10px;
+  --sidebar-w: 232px;
+  color-scheme: dark;
+  font-family: 'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic UI', Meiryo, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+a { color: var(--accent); }
+a:hover { color: #93c5fd; }
+h1 { font-size: 1.45rem; margin: 0 0 12px; }
+h2 { font-size: 1.12rem; margin: 22px 0 10px; }
+h3 { font-size: 1rem; margin: 8px 0; }
+.panel h2:first-child, .panel h3:first-child { margin-top: 0; }
+:focus-visible { outline: 3px solid var(--warn); outline-offset: 2px; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.skip-link { position: absolute; left: -999px; top: 0; background: var(--accent); color: #000; padding: 6px 10px; z-index: 100; }
+.skip-link:focus { left: 8px; }
+.muted { color: var(--muted); }
+.small { font-size: 0.85em; }
+.warn { color: var(--warn); }
+.pos { color: var(--pos); font-weight: 600; }
+.neg { color: var(--neg); }
+.na { color: var(--na); font-style: italic; font-size: 0.9em; }
+.ok-msg { color: var(--pos); }
+.combo { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; letter-spacing: 0.04em; }
+
+/* ---- レイアウト：PCはサイドバー＋分析領域 ---- */
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  position: sticky; top: 0; height: 100vh; width: var(--sidebar-w); flex-shrink: 0;
+  background: #081029; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 16px 10px;
+}
+.brand { display: flex; align-items: center; gap: 8px; padding: 4px 10px 18px; font-weight: 800; letter-spacing: 0.06em; }
+.brand__logo { font-size: 1.3rem; }
+.nav { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.nav__link {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; color: var(--text); text-decoration: none;
+  border-left: 3px solid transparent;
+}
+.nav__link:hover { background: var(--surface); color: var(--text); }
+.nav__link.is-active { background: var(--surface-2); border-left-color: var(--accent); font-weight: 700; }
+.nav__icon { width: 1.3em; text-align: center; color: var(--accent); }
+.nav__short { display: none; }
+.sidebar__foot { margin-top: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; }
+.main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topbar { display: none; }
+.content { padding: 20px 28px 40px; max-width: 1280px; width: 100%; }
+.content:focus { outline: none; }
+
+.demo-banner {
+  background: #3b2a05; color: #fde68a; border-bottom: 1px solid #a16207; padding: 6px 28px; font-size: 0.88rem;
+}
+.demo-badge {
+  display: inline-block; background: var(--warn); color: #1f1300; font-weight: 800; font-size: 0.75rem;
+  padding: 1px 8px; border-radius: 999px; white-space: nowrap; vertical-align: middle;
+}
+
+/* ---- 部品 ---- */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin: 12px 0; min-width: 0; }
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 8px 0 12px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; display: flex; flex-direction: column; }
+.stat__label { color: var(--muted); font-size: 0.8rem; }
+.stat__value { font-size: 1.4rem; font-weight: 700; }
+.stat__value.small { font-size: 1rem; }
+
+.filters { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; margin: 6px 0 12px; }
+.field { display: flex; flex-direction: column; gap: 3px; font-size: 0.85rem; color: var(--muted); }
+.field--inline { flex-direction: row; align-items: center; gap: 8px; margin-bottom: 8px; }
+select, input[type='date'], input:not([type]), input[inputmode] {
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 10px; font-size: 0.95rem; min-height: 38px; min-width: 120px; font-family: inherit;
+}
+.checks { border: 0; padding: 0; margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.checks legend { color: var(--muted); font-size: 0.85rem; margin-bottom: 4px; }
+.check { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; cursor: pointer; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px; background: var(--accent-strong); color: #fff;
+  border: 1px solid var(--accent-strong); border-radius: 8px; padding: 7px 14px; min-height: 38px; font-size: 0.92rem;
+  text-decoration: none; cursor: pointer; font-family: inherit;
+}
+.btn:hover { background: #2563eb; color: #fff; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn--ghost { background: transparent; color: var(--accent); border-color: var(--border); }
+.btn--ghost:hover { background: var(--surface-2); color: var(--accent); }
+.btn--small { padding: 3px 10px; min-height: 30px; font-size: 0.82rem; }
+.btn--danger { background: transparent; border-color: var(--neg); color: var(--neg); margin-top: 10px; }
+.btn--danger:hover { background: #3f1515; color: var(--neg); }
+.button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* 表：横スクロール対応 */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: var(--radius); margin: 8px 0; background: var(--surface); }
+.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; white-space: nowrap; }
+.table th, .table td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+.table thead th { background: var(--surface-2); color: var(--muted); font-weight: 600; position: sticky; top: 0; }
+.table tbody tr:hover { background: #142350; }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.table td.best { background: rgba(52, 211, 153, 0.12); font-weight: 700; }
+.table tr.is-absent { opacity: 0.55; }
+.racer-name { font-weight: 600; }
+
+/* 艇番（色＋数字） */
+.boat {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 5px;
+  font-weight: 800; border: 1px solid #fff3; font-variant-numeric: tabular-nums;
+}
+.boat--sm { width: 20px; height: 20px; font-size: 0.78rem; }
+.boat--1 { background: #f8fafc; color: #0a1430; }
+.boat--2 { background: #111827; color: #fff; border-color: #9ca3af; }
+.boat--3 { background: #dc2626; color: #fff; }
+.boat--4 { background: #2563eb; color: #fff; }
+.boat--5 { background: #facc15; color: #1f1300; }
+.boat--6 { background: #16a34a; color: #fff; }
+.grade { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 0.78rem; font-weight: 700; border: 1px solid var(--border); }
+.grade--a1 { background: #7f1d1d; color: #fecaca; }
+.grade--a2 { background: #7c2d12; color: #fed7aa; }
+.grade--b1 { background: #1e3a8a; color: #bfdbfe; }
+.grade--b2 { background: #334155; color: #e2e8f0; }
+
+.status { font-size: 0.75rem; padding: 0 6px; border-radius: 4px; border: 1px solid var(--border); margin-left: auto; }
+.status--finished { color: var(--muted); }
+.status--scheduled { color: var(--pos); border-color: var(--pos); }
+.status--cancelled { color: var(--neg); }
+
+/* レース一覧カード */
+.race-grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.race-card { display: block; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; color: var(--text); text-decoration: none; }
+.race-card:hover { border-color: var(--accent); color: var(--text); }
+.race-card__head { display: flex; gap: 8px; align-items: center; font-weight: 700; }
+.race-card__no { font-size: 1.15rem; color: var(--accent); }
+.race-card__meta, .race-card__flags { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 0.82rem; color: var(--muted); }
+
+.chips { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; gap: 4px; align-items: baseline; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; font-weight: 600; }
+.chip--finished { opacity: 0.6; }
+.chip:hover { border-color: var(--accent); color: var(--text); }
+.venue-row h3 { margin: 4px 0; font-size: 0.95rem; }
+.list { padding-left: 1.1em; margin: 6px 0; }
+.list li { margin-bottom: 6px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+.result-boat { display: inline-flex; gap: 4px; align-items: center; margin-right: 10px; }
+.settle { font-weight: 700; }
+.settle--hit { color: var(--pos); }
+.settle--miss { color: var(--muted); }
+.settle--pending { color: var(--warn); }
+
+.disclaimer { border: 1px solid #a16207; background: #2a1f05; color: #fde68a; border-radius: var(--radius); padding: 8px 12px; font-size: 0.85rem; margin: 10px 0; }
+.input-errors { color: var(--neg); margin: 6px 0; padding-left: 1.2em; }
+.log { list-style: none; padding: 0; margin: 0; font-size: 0.85rem; display: grid; gap: 3px; }
+
+/* 状態表示 */
+.state { display: flex; gap: 12px; align-items: flex-start; padding: 18px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--surface); margin: 10px 0; }
+.state__icon { font-size: 1.4rem; line-height: 1; }
+.state__title { margin: 0 0 4px; font-weight: 700; }
+.state__body { color: var(--muted); font-size: 0.9rem; }
+.state--error { border: 1px solid var(--neg); background: #2a1020; }
+.state--error .state__icon { color: var(--neg); }
+.state__issues { margin: 6px 0; padding-left: 1.2em; font-size: 0.88rem; }
+.spinner { width: 20px; height: 20px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* グラフ */
+.chart { margin: 0; }
+.chart__title { font-size: 0.9rem; color: var(--muted); margin-bottom: 4px; }
+.chart svg { display: block; max-width: 560px; }
+.chart__label { fill: var(--text); font-size: 12px; }
+.chart__value { fill: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.chart__value--na { fill: var(--na); font-style: italic; }
+.chart__track { fill: var(--surface-2); }
+.chart__bar { fill: var(--accent-strong); }
+.chart__bar--hi { fill: var(--pos); }
+
+.only-mobile { display: none; }
+.entry-cards { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 8px; }
+.entry-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.entry-card.is-absent { opacity: 0.6; }
+.entry-card__head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+
+/* ---- タブレット ---- */
+@media (max-width: 1024px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+
+/* ---- スマートフォン：縦方向レイアウト＋下部ナビ ---- */
+@media (max-width: 760px) {
+  :root { font-size: 15px; }
+  .app { flex-direction: column; }
+  .sidebar {
+    position: fixed; bottom: 0; top: auto; left: 0; right: 0; height: auto; width: 100%; z-index: 50;
+    flex-direction: row; padding: 0; border-right: 0; border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .brand, .sidebar__foot { display: none; }
+  .sidebar nav { width: 100%; }
+  .nav { grid-template-columns: repeat(7, 1fr); gap: 0; }
+  .nav__link { flex-direction: column; gap: 0; padding: 6px 0 5px; border-left: 0; border-top: 3px solid transparent; border-radius: 0; font-size: 0.7rem; }
+  .nav__link.is-active { border-top-color: var(--accent); }
+  .nav__label { display: none; }
+  .nav__short { display: block; }
+  .nav__icon { font-size: 1.05rem; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: #081029; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 40; font-weight: 800; letter-spacing: 0.05em; }
+  .demo-banner { padding: 6px 16px; }
+  .content { padding: 14px 16px 90px; }
+  .filters { display: grid; grid-template-columns: 1fr 1fr; }
+  .filters .field select, .filters .field input { width: 100%; min-width: 0; }
+  .only-desktop { display: none; }
+  .only-mobile { display: grid; }
+  .race-grid { grid-template-columns: 1fr; }
+  h1 { font-size: 1.25rem; }
+}
