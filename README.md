@@ -33,7 +33,7 @@ npm run dev        # 開発サーバ http://localhost:5173
 npm run build      # 型チェック＋ dist/ に出力
 npm run preview    # http://localhost:4173
 ```
-`dist/` は静的ファイルだけなので、任意の静的サーバに置けば動きます（HashRouter を使用）。※デプロイはまだ行っていません。
+`dist/` は静的ファイルだけなので、任意の静的サーバに置けば動きます（HashRouter を使用）。このブランチへのプッシュで `.github/workflows/deploy.yml` が GitHub Pages に自動公開します。
 
 ## 操作方法（例）
 1. **ダッシュボード**で対象日のレースと期待値候補を確認する。
@@ -44,6 +44,14 @@ npm run preview    # http://localhost:4173
 6. **設定**で候補条件やモデルを変更する。「実データ」に切り替えると、取得元が未設定である旨のエラー表示を確認できます。
 
 スマートフォンでは画面下部のナビで移動します。表は横にスクロールするか、カード表示に切り替わります。
+
+## スマートフォンのホーム画面に追加する
+GitHub Pages（https://gangidenset.github.io/boat-analyzer/ ）で公開しています。PWA（manifest・アイコン・Service Worker）に対応しているので、ホーム画面に追加するとアプリのように全画面で起動できます。
+- **iPhone（Safari）**：共有ボタン（□↑）→「ホーム画面に追加」。Chrome など Safari 以外のブラウザでは追加できない場合があります。
+- **Android（Chrome）**：右上の︙ →「ホーム画面に追加」または「アプリをインストール」。
+
+Service Worker はネットワークを優先し、オフラインのときだけ前回表示した内容を出します。
+アイコン（PNG）は `scripts/generate-icons.mjs` が `npm run dev` / `npm run build` の前に自動で生成します（生成物はコミットしません）。
 
 ## テスト
 ```bash

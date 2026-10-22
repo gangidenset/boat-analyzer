@@ -10,3 +10,12 @@ createRoot(root).render(
     <App />
   </StrictMode>,
 );
+
+// ホーム画面に追加したときのオフライン表示用（本番ビルドのみ。開発中はキャッシュの混乱を避ける）
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {
+      // 登録できなくてもアプリは通常どおり動作する
+    });
+  });
+}

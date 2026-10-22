@@ -1,0 +1,17 @@
+{
+  "name": "BOAT ANALYZER",
+  "short_name": "BOAT分析",
+  "description": "競艇レース分析・期待値計算ツール（MVP・デモデータ）",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1430",
+  "theme_color": "#0a1430",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
